@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mic Test</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body style="padding: 20px; font-family: Arial;">
+    <h2>Microphone Test</h2>
+    <button id="start" style="padding: 20px; font-size: 18px;">Start Recording</button>
+    <button id="stop" style="padding: 20px; font-size: 18px;" disabled>Stop</button>
+    <p id="status">Click Start to test microphone</p>
+    <canvas id="canvas" width="800" height="200" style="border: 1px solid black; width: 100%;"></canvas>
+    
+    <script>
+        let audioContext, analyser, microphone, dataArray;
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        document.getElementById('start').onclick = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                document.getElementById('status').innerText = '✓ Microphone access granted!';
+                
+                audioContext = new AudioContext({ sampleRate: 16000 });
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+                microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+                
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                
+                document.getElementById('start').disabled = true;
+                document.getElementById('stop').disabled = false;
+                
+                draw();
+            } catch (err) {
+                document.getElementById('status').innerText = '✗ Error: ' + err.message;
+            }
+        };
+        
+        document.getElementById('stop').onclick = () => {
+            if (microphone) microphone.disconnect();
+            if (audioContext) audioContext.close();
+            document.getElementById('start').disabled = false;
+            document.getElementById('stop').disabled = true;
+            document.getElementById('status').innerText = 'Stopped';
+        };
+        
+        function draw() {
+            if (!analyser) return;
+            requestAnimationFrame(draw);
+            
+            analyser.getByteFrequencyData(dataArray);
+            
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            const barWidth = canvas.width / dataArray.length;
+            let x = 0;
+            
+            for (let i = 0; i < dataArray.length; i++) {
+                const barHeight = (dataArray[i] / 255) * canvas.height;
+                ctx.fillStyle = `rgb(${dataArray[i]}, 50, 50)`;
+                ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+                x += barWidth;
+            }
+        }
+    </script>
+</body>
+</html>

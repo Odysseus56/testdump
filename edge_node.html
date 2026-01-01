@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Guardian-M Edge Node</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background: #1a1a1a;
+            color: white;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        h1 {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        .status {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            font-size: 14px;
+        }
+        .status.inactive { background: #333; }
+        .status.active { background: #1a5f1a; }
+        .status.detecting { background: #8b0000; animation: pulse 1s infinite; }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        button {
+            width: 100%;
+            padding: 20px;
+            font-size: 18px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            margin: 10px 0;
+        }
+        .start-btn { background: #28a745; color: white; }
+        .stop-btn { background: #dc3545; color: white; }
+        button:disabled { background: #666; cursor: not-allowed; }
+        .stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin: 20px 0;
+        }
+        .stat-box {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #4CAF50;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #999;
+            margin-top: 5px;
+        }
+        .config {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 20px 0;
+            font-size: 12px;
+        }
+        .config div { margin: 5px 0; }
+        canvas {
+            width: 100%;
+            height: 150px;
+            border: 1px solid #444;
+            border-radius: 8px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛡️ Guardian-M Edge Node</h1>
+        
+        <div id="status" class="status inactive">
+            ⚫ Inactive - Click Start to begin monitoring
+        </div>
+        
+        <button id="startBtn" class="start-btn">Start Monitoring</button>
+        <button id="stopBtn" class="stop-btn" disabled>Stop Monitoring</button>
+        
+        <div class="stats">
+            <div class="stat-box">
+                <div class="stat-value" id="detectionCount">0</div>
+                <div class="stat-label">Detections</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-value" id="lastDetection">--</div>
+                <div class="stat-label">Last Detection</div>
+            </div>
+        </div>
+        
+        <canvas id="spectrum" width="600" height="150"></canvas>
+        
+        <div class="config">
+            <strong>Configuration:</strong>
+            <div>Node ID: <span id="nodeId">--</span></div>
+            <div>Position: <span id="position">--</span></div>
+            <div>Backend: <span id="backend">--</span></div>
+            <div>Threshold: <span id="threshold">--</span></div>
+        </div>
+    </div>
+    
+    <script>
+        // Parse URL parameters or use defaults
+        const urlParams = new URLSearchParams(window.location.search);
+        const NODE_ID = urlParams.get('node_id') || 'Pixel_Unknown';
+        const NODE_LAT = parseFloat(urlParams.get('lat')) || 49.2827;
+        const NODE_LON = parseFloat(urlParams.get('lon')) || -123.1207;
+        const BACKEND_URL = urlParams.get('backend') || 'http://192.168.1.100:8000';
+        const DETECTION_THRESHOLD = parseInt(urlParams.get('threshold')) || 100;
+        
+        // Display configuration
+        document.getElementById('nodeId').textContent = NODE_ID;
+        document.getElementById('position').textContent = `${NODE_LAT.toFixed(4)}, ${NODE_LON.toFixed(4)}`;
+        document.getElementById('backend').textContent = BACKEND_URL;
+        document.getElementById('threshold').textContent = DETECTION_THRESHOLD;
+        
+        // Audio processing variables
+        let audioContext, analyser, microphone, dataArray, freqArray;
+        let isMonitoring = false;
+        let detectionCount = 0;
+        
+        // Canvas for spectrum visualization
+        const canvas = document.getElementById('spectrum');
+        const ctx = canvas.getContext('2d');
+        
+        // Start monitoring
+        document.getElementById('startBtn').onclick = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                
+                audioContext = new AudioContext({ sampleRate: 16000 });
+                analyser = audioContext.createAnalyser();
+                analyser.fftSize = 2048;
+                microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+                
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                freqArray = new Float32Array(analyser.frequencyBinCount);
+                
+                isMonitoring = true;
+                document.getElementById('startBtn').disabled = true;
+                document.getElementById('stopBtn').disabled = false;
+                document.getElementById('status').className = 'status active';
+                document.getElementById('status').textContent = '🟢 Monitoring - Listening for drones...';
+                
+                detectLoop();
+            } catch (err) {
+                alert('Microphone access denied: ' + err.message);
+            }
+        };
+        
+        // Stop monitoring
+        document.getElementById('stopBtn').onclick = () => {
+            isMonitoring = false;
+            if (microphone) microphone.disconnect();
+            if (audioContext) audioContext.close();
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            document.getElementById('status').className = 'status inactive';
+            document.getElementById('status').textContent = '⚫ Inactive';
+        };
+        
+        // Detection loop
+        function detectLoop() {
+            if (!isMonitoring) return;
+            
+            analyser.getByteFrequencyData(dataArray);
+            analyser.getFloatFrequencyData(freqArray);
+            
+            // Draw spectrum
+            drawSpectrum();
+            
+            // Analyze 5-8kHz range for drone frequencies
+            const sampleRate = audioContext.sampleRate;
+            const binSize = sampleRate / analyser.fftSize;
+            const startBin = Math.floor(5000 / binSize);
+            const endBin = Math.floor(8000 / binSize);
+            
+            let maxMagnitude = 0;
+            let maxFreq = 0;
+            
+            for (let i = startBin; i < endBin; i++) {
+                if (dataArray[i] > maxMagnitude) {
+                    maxMagnitude = dataArray[i];
+                    maxFreq = i * binSize;
+                }
+            }
+            
+            // Detection threshold (0-255 scale)
+            if (maxMagnitude > DETECTION_THRESHOLD) {
+                triggerDetection(maxFreq, maxMagnitude);
+            }
+            
+            requestAnimationFrame(detectLoop);
+        }
+        
+        // Draw spectrum visualization
+        function drawSpectrum() {
+            ctx.fillStyle = '#1a1a1a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            const barWidth = canvas.width / dataArray.length;
+            let x = 0;
+            
+            for (let i = 0; i < dataArray.length; i++) {
+                const barHeight = (dataArray[i] / 255) * canvas.height;
+                
+                // Highlight 5-8kHz range in red
+                const freq = (i * audioContext.sampleRate) / analyser.fftSize;
+                if (freq >= 5000 && freq <= 8000) {
+                    ctx.fillStyle = `rgb(${dataArray[i]}, 50, 50)`;
+                } else {
+                    ctx.fillStyle = `rgb(50, ${dataArray[i] / 2}, 50)`;
+                }
+                
+                ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+                x += barWidth;
+            }
+        }
+        
+        // Trigger detection and send to backend
+        let lastDetectionTime = 0;
+        async function triggerDetection(freq, magnitude) {
+            const now = Date.now();
+            
+            // Debounce: only send one detection per second
+            if (now - lastDetectionTime < 1000) return;
+            lastDetectionTime = now;
+            
+            detectionCount++;
+            document.getElementById('detectionCount').textContent = detectionCount;
+            document.getElementById('lastDetection').textContent = new Date().toLocaleTimeString();
+            
+            // Flash status
+            document.getElementById('status').className = 'status detecting';
+            document.getElementById('status').textContent = `🔴 DETECTION! ${freq.toFixed(0)} Hz`;
+            setTimeout(() => {
+                if (isMonitoring) {
+                    document.getElementById('status').className = 'status active';
+                    document.getElementById('status').textContent = '🟢 Monitoring - Listening for drones...';
+                }
+            }, 1000);
+            
+            // Convert magnitude to dB (approximate)
+            const magnitudeDb = -60 + (magnitude / 255) * 60;
+            
+            // Send to backend
+            const event = {
+                node_id: NODE_ID,
+                timestamp: Date.now() / 1000,
+                peak_frequency_hz: freq,
+                peak_magnitude_db: magnitudeDb,
+                lat: NODE_LAT,
+                lon: NODE_LON
+            };
+            
+            try {
+                const response = await fetch(`${BACKEND_URL}/api/detection`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(event)
+                });
+                
+                if (!response.ok) {
+                    console.error('Failed to send detection:', response.status);
+                }
+            } catch (err) {
+                console.error('Backend connection error:', err);
+            }
+        }
+    </script>
+</body>
+</html>
